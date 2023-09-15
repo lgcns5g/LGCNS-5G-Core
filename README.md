@@ -1,11 +1,10 @@
 <p align="center"><a href="https://github.com/lgcns5g/LGCNS-5G-Core" target="_blank" rel="noopener noreferrer"><img width="700" src="https://github.com/lgcns5g/LGCNS-5G-Core/blob/main/assets/img/LG%20CNS%205G%20Core.png" alt="LG CNS 5G Core logo"></a></p> 
 
 LG CNS 5G Core is a solution based on the 3GPP specifications for the 5G Core Network.  
-Control Plane is based on [Open5GS](https://github.com/open5gs/open5gs), User Plane is based on [upg-vpp](https://github.com/travelping/upg-vpp).  
 This repository is only for Control Plane of the 5G Core Network. For User Plane, visit [here](https://github.com/lgcns5g/LGCNS-5G-Core-UPF).  
-We only provide patches for the Control Plane in accordance with the GNU Affero General Public License.
+Control Plane is based on [Open5GS](https://github.com/open5gs/open5gs).
 
-Currently, it contains the following network functions:
+We only provide patches for the Control Plane in accordance with the GNU Affero General Public License.
 
 ### Control Plane
 - Access and Mobility Management Function (AMF)
@@ -17,9 +16,6 @@ Currently, it contains the following network functions:
 - Network Slicing Selection Function (NSSF)
 - Policy and Charging Function(PCF)
 - Binding Support Function(BSF)
-
-### User Plane
-- [User Plane Function (UPF)](https://github.com/lgcns5g/LGCNS-5G-Core-UPF)  
 
 ## Getting Started
 Please apply the patches before building.  
