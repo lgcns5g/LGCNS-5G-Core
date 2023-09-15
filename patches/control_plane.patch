@@ -1,0 +1,816 @@
+diff --git a/.dockerignore b/.dockerignore
+index 738a20d..b464872 100644
+--- a/.dockerignore
++++ b/.dockerignore
+@@ -1,7 +1,6 @@
+ **/*.md
+ **/docker-compose*.yml
+ **/docker-compose*.yaml
+-**/Dockerfile*
+ .git
+ .dockerignore
+ .cache
+diff --git a/lib/core/ogs-log.c b/lib/core/ogs-log.c
+index 5baf385..de579fe 100644
+--- a/lib/core/ogs-log.c
++++ b/lib/core/ogs-log.c
+@@ -15,6 +15,8 @@
+  *
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ *
++ * Modified Date: 2023-06-28 Description: add log level 'MESSAGE'
+  */
+ 
+ #include "core-config-private.h"
+@@ -86,7 +88,7 @@ typedef struct ogs_log_domain_s {
+ 
+ const char *level_strings[] = {
+     NULL,
+-    "FATAL", "ERROR", "WARNING", "INFO", "DEBUG", "TRACE",
++    "FATAL", "ERROR", "WARNING", "INFO", "MESSAGE", "DEBUG", "TRACE",
+ };
+ 
+ static OGS_POOL(log_pool, ogs_log_t);
+@@ -349,6 +351,7 @@ static ogs_log_level_e ogs_log_level_from_string(const char *string)
+     else if (!strcasecmp(string, "error")) level = OGS_LOG_ERROR;
+     else if (!strcasecmp(string, "warn")) level = OGS_LOG_WARN;
+     else if (!strcasecmp(string, "info")) level = OGS_LOG_INFO;
++    else if (!strcasecmp(string, "message")) level = OGS_LOG_MESSAGE;
+     else if (!strcasecmp(string, "debug")) level = OGS_LOG_DEBUG;
+     else if (!strcasecmp(string, "trace")) level = OGS_LOG_TRACE;
+ 
+@@ -364,7 +367,7 @@ int ogs_log_config_domain(const char *domain, const char *level)
+             l = ogs_log_level_from_string(level);
+             if (l == OGS_ERROR) {
+                 ogs_error("Invalid LOG-LEVEL "
+-                        "[none:fatal|error|warn|info|debug|trace]: %s\n",
++                        "[none:fatal|error|warn|info|message|debug|trace]: %s\n",
+                         level);
+                 return OGS_ERROR;
+             }
+@@ -573,7 +576,8 @@ static char *log_level(char *buf, char *last,
+     const char *colors[] = {
+         TA_NOR,
+         TA_FGC_BOLD_RED, TA_FGC_BOLD_YELLOW, TA_FGC_BOLD_CYAN,
+-        TA_FGC_BOLD_GREEN, TA_FGC_BOLD_WHITE, TA_FGC_WHITE,
++        TA_FGC_BOLD_GREEN, TA_FGC_BOLD_BLUE, TA_FGC_BOLD_WHITE, 
++        TA_FGC_WHITE,
+     };
+ 
+     buf = ogs_slprintf(buf, last, "%s%s%s: ",
+diff --git a/lib/core/ogs-log.h b/lib/core/ogs-log.h
+index 24a6b77..79b2d12 100644
+--- a/lib/core/ogs-log.h
++++ b/lib/core/ogs-log.h
+@@ -15,6 +15,8 @@
+  *
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ *
++ * Modified Date: 2023-06-28 Description: add log level 'MESSAGE'
+  */
+ 
+ #if !defined(OGS_CORE_INSIDE) && !defined(OGS_CORE_COMPILATION)
+@@ -36,6 +38,7 @@ extern "C" {
+ #define ogs_error(...) ogs_log_message(OGS_LOG_ERROR, 0, __VA_ARGS__)
+ #define ogs_warn(...) ogs_log_message(OGS_LOG_WARN, 0, __VA_ARGS__)
+ #define ogs_info(...) ogs_log_message(OGS_LOG_INFO, 0, __VA_ARGS__)
++#define ogs_message(...) ogs_log_message(OGS_LOG_MESSAGE, 0, __VA_ARGS__)
+ #define ogs_debug(...) ogs_log_message(OGS_LOG_DEBUG, 0, __VA_ARGS__)
+ #define ogs_trace(...) ogs_log_message(OGS_LOG_TRACE, 0, __VA_ARGS__)
+ 
+@@ -58,6 +61,7 @@ typedef enum {
+     OGS_LOG_ERROR,
+     OGS_LOG_WARN,
+     OGS_LOG_INFO,
++    OGS_LOG_MESSAGE,
+     OGS_LOG_DEBUG,
+     OGS_LOG_TRACE,
+     OGS_LOG_DEFAULT = OGS_LOG_INFO,
+diff --git a/lib/pfcp/handler.c b/lib/pfcp/handler.c
+index 356bd81..c863828 100644
+--- a/lib/pfcp/handler.c
++++ b/lib/pfcp/handler.c
+@@ -150,6 +150,8 @@ bool ogs_pfcp_cp_handle_association_setup_response(
+     ogs_assert(node);
+     ogs_assert(rsp);
+ 
++    ogs_pfcp_log_message(OGS_PFCP_ASSOCIATION_SETUP_RESPONSE_TYPE, &xact->node->addr, NULL);
++
+     ogs_gtpu_resource_remove_all(&node->gtpu_resource_list);
+ 
+     for (i = 0; i < OGS_MAX_NUM_OF_GTPU_RESOURCE; i++) {
+diff --git a/lib/pfcp/message.c b/lib/pfcp/message.c
+index c8aee5f..38af0b4 100644
+--- a/lib/pfcp/message.c
++++ b/lib/pfcp/message.c
+@@ -4987,3 +4987,35 @@ ogs_pkbuf_t *ogs_pfcp_build_msg(ogs_pfcp_message_t *pfcp_message)
+     return pkbuf;
+ }
+ 
++
++void ogs_pfcp_log_message(uint8_t message_type, ogs_sockaddr_t *addr, const char* supi)
++{    
++    char buf[OGS_ADDRSTRLEN];
++
++    switch (message_type) {
++    case OGS_PFCP_ASSOCIATION_SETUP_REQUEST_TYPE:
++        ogs_message("[upf: %s] PFCPAssociationSetupRequest", OGS_ADDR(addr, buf));
++        break;
++    case OGS_PFCP_ASSOCIATION_SETUP_RESPONSE_TYPE:
++        ogs_message("[upf: %s] PFCPAssociationSetupResponse", OGS_ADDR(addr, buf));
++        break;
++    case OGS_PFCP_SESSION_ESTABLISHMENT_REQUEST_TYPE:
++        ogs_message("[%s][upf: %s] PFCPSessionEstablishmentRequest", supi, OGS_ADDR(addr, buf));
++        break;
++    case OGS_PFCP_SESSION_ESTABLISHMENT_RESPONSE_TYPE:
++        ogs_message("[%s][upf: %s] PFCPSessionEstablishmentResponse", supi, OGS_ADDR(addr, buf));
++        break;
++    case OGS_PFCP_SESSION_MODIFICATION_REQUEST_TYPE:
++        ogs_message("[%s][upf: %s] PFCPSessionModificationRequest", supi, OGS_ADDR(addr, buf));
++        break;
++    case OGS_PFCP_SESSION_MODIFICATION_RESPONSE_TYPE:
++        ogs_message("[%s][upf: %s] PFCPSessionModificationResponse", supi, OGS_ADDR(addr, buf));
++        break;
++    case OGS_PFCP_SESSION_REPORT_REQUEST_TYPE:
++        ogs_message("[%s][upf: %s] PFCPSessionReportRequest", supi, OGS_ADDR(addr, buf));
++        break;
++    case OGS_PFCP_SESSION_REPORT_RESPONSE_TYPE:
++        ogs_message("[%s][upf: %s] PFCPSessionReportResponse", supi, OGS_ADDR(addr, buf));
++        break;
++    }
++}
+\ No newline at end of file
+diff --git a/lib/pfcp/message.h b/lib/pfcp/message.h
+index 69adde3..5ad2793 100644
+--- a/lib/pfcp/message.h
++++ b/lib/pfcp/message.h
+@@ -2182,6 +2182,8 @@ ogs_pfcp_message_t *ogs_pfcp_parse_msg(ogs_pkbuf_t *pkbuf);
+ void ogs_pfcp_message_free(ogs_pfcp_message_t *pfcp_message);
+ ogs_pkbuf_t *ogs_pfcp_build_msg(ogs_pfcp_message_t *pfcp_message);
+ 
++void ogs_pfcp_log_message(uint8_t message_type, ogs_sockaddr_t *addr, const char* supi);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/lib/pfcp/path.c b/lib/pfcp/path.c
+index 8719afd..3cb87d3 100644
+--- a/lib/pfcp/path.c
++++ b/lib/pfcp/path.c
+@@ -240,6 +240,10 @@ int ogs_pfcp_cp_send_association_setup_request(ogs_pfcp_node_t *node,
+     rv = ogs_pfcp_xact_commit(xact);
+     ogs_expect(rv == OGS_OK);
+ 
++    if (rv == OGS_OK){
++        ogs_pfcp_log_message(OGS_PFCP_ASSOCIATION_SETUP_REQUEST_TYPE, &xact->node->addr, NULL);
++    }
++
+     return rv;
+ }
+ 
+diff --git a/src/amf/event.c b/src/amf/event.c
+index a920f61..61f34aa 100644
+--- a/src/amf/event.c
++++ b/src/amf/event.c
+@@ -15,6 +15,8 @@
+  *
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ *
++ * Modified Date: 2023-06-28 Description: add log level 'MESSAGE'
+  */
+ 
+ #include "event.h"
+@@ -114,3 +116,121 @@ void amf_sctp_event_push(int id,
+     }
+ #endif
+ }
++
++void amf_log_nas_message(uint8_t message_type, const char* supi)
++{
++    switch (message_type) {
++    case OGS_NAS_5GS_REGISTRATION_REQUEST:
++        ogs_message("[%s] RegistrationRequest", supi);
++        break;
++    case OGS_NAS_5GS_REGISTRATION_ACCEPT:
++        ogs_message("[%s] RegistrationAccept", supi);
++        break;
++    case OGS_NAS_5GS_REGISTRATION_COMPLETE:
++        ogs_message("[%s] RegistrationComplete", supi);
++        break;
++    case OGS_NAS_5GS_REGISTRATION_REJECT:
++        ogs_message("[%s] RegistrationReject", supi);
++        break;
++    case OGS_NAS_5GS_DEREGISTRATION_REQUEST_FROM_UE:
++        ogs_message("[%s] DeregistrationRequestFromUe", supi);
++        break;
++    case OGS_NAS_5GS_DEREGISTRATION_ACCEPT_FROM_UE:
++        ogs_message("[%s] DeregistrationAcceptFromUe", supi);
++        break;
++    case OGS_NAS_5GS_DEREGISTRATION_REQUEST_TO_UE:
++        ogs_message("[%s] DeregistrationRequestToUe", supi);
++        break;
++    case OGS_NAS_5GS_DEREGISTRATION_ACCEPT_TO_UE:
++        ogs_message("[%s] DeregistrationAcceptToUe", supi);
++        break;
++    case OGS_NAS_5GS_SERVICE_REQUEST:
++        ogs_message("[%s] ServiceRequest", supi);
++        break;    
++    case OGS_NAS_5GS_SERVICE_REJECT:
++        ogs_message("[%s] ServiceReject", supi);
++        break;    
++    case OGS_NAS_5GS_SERVICE_ACCEPT:
++        ogs_message("[%s] ServiceAccept", supi);
++        break;    
++    case OGS_NAS_5GS_PDU_SESSION_ESTABLISHMENT_REQUEST:
++        ogs_message("[%s] PduSessionEstablishmentRequest", supi);
++        break;    
++    case OGS_NAS_5GS_PDU_SESSION_ESTABLISHMENT_ACCEPT:
++        ogs_message("[%s] PduSessionEstablishmentAccept", supi);
++        break;    
++    case OGS_NAS_5GS_PDU_SESSION_ESTABLISHMENT_REJECT:
++        ogs_message("[%s] PduSessionEstablishmentReject", supi);
++        break;    
++    case OGS_NAS_5GS_PDU_SESSION_RELEASE_REQUEST:
++        ogs_message("[%s] PduSessionReleaseRequest", supi);
++        break;    
++    // case OGS_NAS_5GS_PDU_SESSION_RELEASE_REJECT:
++    //     ogs_message("[%s] PduSessionReleaseReject", supi);
++    //     break;    
++    case OGS_NAS_5GS_PDU_SESSION_RELEASE_COMMAND:
++        ogs_message("[%s] PduSessionReleaseCommand", supi);
++        break;    
++    case OGS_NAS_5GS_PDU_SESSION_RELEASE_COMPLETE:
++        ogs_message("[%s] PduSessionReleaseComplete", supi);
++        break;    
++    }
++}
++
++void amf_log_ngap_message_from_gnb(NGAP_ProcedureCode_t procedureCode, 
++        uint32_t gnb_id, const char* supi, bool is_initiating)
++{
++    switch (procedureCode) {
++    case NGAP_ProcedureCode_id_NGSetup:
++        ogs_message("[gNB: %u] NgSetupRequest", gnb_id);
++        break;
++    case NGAP_ProcedureCode_id_HandoverPreparation: 
++        ogs_message("[%s][gNB: %u] HandoverRequired", supi, gnb_id); //N2 Handover
++        break;
++    case NGAP_ProcedureCode_id_HandoverResourceAllocation: 
++        ogs_message("[%s][gNB: %u] HandoverRequestAcknowledge", supi, gnb_id); //N2 Handover
++        break;
++    case NGAP_ProcedureCode_id_HandoverNotification: 
++        ogs_message("[%s][gNB: %u] HandoverNotify", supi, gnb_id); //N2 Handover
++        break;
++    case NGAP_ProcedureCode_id_PathSwitchRequest:
++        ogs_message("[%s][gNB: %u] PathSwitchRequest", supi, gnb_id); // Xn Handover
++        break;
++    case NGAP_ProcedureCode_id_NGReset:
++        if (is_initiating) {
++            ogs_message("[gNB: %u] NgResetFromGnb", gnb_id);
++        } else {
++            ogs_message("[gNB: %u] NgResetAcknowledgeFromAmf", gnb_id);
++        }
++        break;
++    }
++}
++
++void amf_log_ngap_message_from_amf(NGAP_ProcedureCode_t procedureCode, 
++        uint32_t gnb_id, const char* supi, bool is_initiating)
++{
++    switch (procedureCode) {
++    case NGAP_ProcedureCode_id_NGSetup:
++        ogs_message("[gNB: %u] NgSetupResponse", gnb_id);
++        break;
++    case NGAP_ProcedureCode_id_HandoverPreparation: 
++        ogs_message("[%s][gNB: %u] HandoverCommand", supi, gnb_id); //N2 Handover
++        break;
++    case NGAP_ProcedureCode_id_HandoverResourceAllocation: 
++        ogs_message("[%s][gNB: %u] HandoverRequest", supi, gnb_id); //N2 Handover
++        break;
++    case NGAP_ProcedureCode_id_PathSwitchRequest:
++        ogs_message("[%s][gNB: %u] PathSwitchRequestAcknowledge", supi, gnb_id); // Xn Handover
++        break;
++    case NGAP_ProcedureCode_id_Paging:
++        ogs_message("[%s][gNB: %u] Paging", supi, gnb_id); // Xn Handover
++        break;
++    case NGAP_ProcedureCode_id_NGReset:
++        if (is_initiating) {
++            ogs_message("[gNB: %u] NgResetFromAmf", gnb_id);
++        } else {
++            ogs_message("[gNB: %u] NgResetAcknowledgeFromGnb", gnb_id);
++        }
++        break;
++    }
++}
+\ No newline at end of file
+diff --git a/src/amf/event.h b/src/amf/event.h
+index 0a53b46..c07c0b4 100644
+--- a/src/amf/event.h
++++ b/src/amf/event.h
+@@ -15,6 +15,8 @@
+  *
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ *
++ * Modified Date: 2023-06-28 Description: add log level 'MESSAGE'
+  */
+ 
+ #ifndef AMF_EVENT_H
+@@ -93,6 +95,12 @@ void amf_sctp_event_push(int id,
+         void *sock, ogs_sockaddr_t *addr, ogs_pkbuf_t *pkbuf,
+         uint16_t max_num_of_istreams, uint16_t max_num_of_ostreams);
+ 
++void amf_log_nas_message(uint8_t message_type, const char* supi);
++void amf_log_ngap_message_from_gnb(NGAP_ProcedureCode_t procedureCode, 
++        uint32_t gnb_id, const char* supi, bool is_initiating);
++void amf_log_ngap_message_from_amf(NGAP_ProcedureCode_t procedureCode,
++        uint32_t gnb_id, const char* supi, bool is_initiating);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/src/amf/gmm-handler.c b/src/amf/gmm-handler.c
+index 50b4c1e..eb647a9 100644
+--- a/src/amf/gmm-handler.c
++++ b/src/amf/gmm-handler.c
+@@ -15,6 +15,8 @@
+  *
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ *
++ * Modified Date: 2023-06-28 Description: add log level 'MESSAGE'
+  */
+ 
+ #include "nas-security.h"
+@@ -50,6 +52,8 @@ ogs_nas_5gmm_cause_t gmm_handle_registration_request(amf_ue_t *amf_ue,
+     ogs_nas_ue_security_capability_t *ue_security_capability = NULL;
+     ogs_nas_5gs_guti_t nas_guti;
+ 
++    char *suci, *supi = NULL;
++
+     ogs_assert(amf_ue);
+     ran_ue = ran_ue_cycle(amf_ue->ran_ue);
+     ogs_assert(ran_ue);
+@@ -62,6 +66,20 @@ ogs_nas_5gmm_cause_t gmm_handle_registration_request(amf_ue_t *amf_ue,
+     ue_security_capability = &registration_request->ue_security_capability;
+     ogs_assert(ue_security_capability);
+ 
++    if (AMF_UE_HAVE_SUCI(amf_ue)) {
++        amf_log_nas_message(OGS_NAS_5GS_REGISTRATION_REQUEST, amf_ue->supi);
++    } else {
++        suci = ogs_nas_5gs_suci_from_mobile_identity(&registration_request->mobile_identity);
++        if (suci) {
++            supi = ogs_supi_from_supi_or_suci(suci);
++            amf_log_nas_message(OGS_NAS_5GS_REGISTRATION_REQUEST, supi);
++            ogs_free(supi);           
++        } else {
++            amf_log_nas_message(OGS_NAS_5GS_REGISTRATION_REQUEST, NULL);
++        }
++        ogs_free(suci);
++    }
++
+     /*
+      * TS33.501
+      * Ch 6.4.6. Protection of initial NAS message
+@@ -759,6 +777,8 @@ int gmm_handle_deregistration_request(amf_ue_t *amf_ue,
+     ogs_assert(amf_ue);
+     ogs_assert(deregistration_request);
+ 
++    amf_log_nas_message(OGS_NAS_5GS_DEREGISTRATION_REQUEST_FROM_UE, amf_ue->supi);
++
+     de_registration_type = &deregistration_request->de_registration_type;
+ 
+     /* Set 5GS De-registration Type */
+@@ -1079,6 +1099,8 @@ int gmm_handle_ul_nas_transport(amf_ue_t *amf_ue,
+         gsm_header = (ogs_nas_5gsm_header_t *)payload_container->buffer;
+         ogs_assert(gsm_header);
+ 
++        amf_log_nas_message(gsm_header->message_type, amf_ue->supi);
++        
+         if (gsm_header->message_type ==
+                 OGS_NAS_5GS_PDU_SESSION_ESTABLISHMENT_REQUEST) {
+             sess = amf_sess_find_by_psi(amf_ue, *pdu_session_id);
+diff --git a/src/amf/gmm-sm.c b/src/amf/gmm-sm.c
+index 71a25c6..256f32e 100644
+--- a/src/amf/gmm-sm.c
++++ b/src/amf/gmm-sm.c
+@@ -15,6 +15,8 @@
+  *
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ *
++ * Modified Date: 2023-06-28 Description: add log level 'MESSAGE'
+  */
+ 
+ #include "ngap-handler.h"
+@@ -1089,6 +1091,7 @@ static void common_register_state(ogs_fsm_t *s, amf_event_t *e,
+ 
+         case OGS_NAS_5GS_SERVICE_REQUEST:
+             ogs_info("Service request");
++            amf_log_nas_message(OGS_NAS_5GS_SERVICE_REQUEST, amf_ue->supi);
+ 
+             if (state != GMM_COMMON_STATE_REGISTERED) {
+                 ogs_info("[%s] Handling service request failed [Not registered]",
+@@ -1198,6 +1201,8 @@ static void common_register_state(ogs_fsm_t *s, amf_event_t *e,
+ 
+         case OGS_NAS_5GS_DEREGISTRATION_ACCEPT_TO_UE:
+             ogs_info("[%s] Deregistration accept", amf_ue->supi);
++            amf_log_nas_message(OGS_NAS_5GS_DEREGISTRATION_ACCEPT_TO_UE, amf_ue->supi);
++
+             CLEAR_AMF_UE_TIMER(amf_ue->t3522);
+ 
+             amf_ue->explict_de_registered.n1_done = true;
+@@ -1260,6 +1265,7 @@ static void common_register_state(ogs_fsm_t *s, amf_event_t *e,
+         case OGS_NAS_5GS_REGISTRATION_COMPLETE:
+             ogs_error("[%s] Registration complete in INVALID-STATE",
+                         amf_ue->supi);
++            amf_log_nas_message(OGS_NAS_5GS_REGISTRATION_COMPLETE, amf_ue->supi);
+             break;
+ 
+         default:
+@@ -1668,6 +1674,7 @@ void gmm_state_security_mode(ogs_fsm_t *s, amf_event_t *e)
+ 
+         case OGS_NAS_5GS_SERVICE_REQUEST:
+             ogs_info("[%s] Service request", amf_ue->supi);
++            amf_log_nas_message(OGS_NAS_5GS_SERVICE_REQUEST, amf_ue->supi);
+             r = nas_5gs_send_service_reject(amf_ue,
+                     OGS_5GMM_CAUSE_UE_IDENTITY_CANNOT_BE_DERIVED_BY_THE_NETWORK);
+             ogs_expect(r == OGS_OK);
+@@ -1915,6 +1922,7 @@ void gmm_state_initial_context_setup(ogs_fsm_t *s, amf_event_t *e)
+         switch (nas_message->gmm.h.message_type) {
+         case OGS_NAS_5GS_REGISTRATION_COMPLETE:
+             ogs_info("[%s] Registration complete", amf_ue->supi);
++            amf_log_nas_message(OGS_NAS_5GS_REGISTRATION_COMPLETE, amf_ue->supi);
+ 
+             CLEAR_AMF_UE_TIMER(amf_ue->t3550);
+ 
+@@ -2027,6 +2035,7 @@ void gmm_state_initial_context_setup(ogs_fsm_t *s, amf_event_t *e)
+ 
+         case OGS_NAS_5GS_SERVICE_REQUEST:
+             ogs_info("[%s] Service request", amf_ue->supi);
++            amf_log_nas_message(OGS_NAS_5GS_SERVICE_REQUEST, amf_ue->supi);
+             r = nas_5gs_send_service_reject(amf_ue,
+                 OGS_5GMM_CAUSE_UE_IDENTITY_CANNOT_BE_DERIVED_BY_THE_NETWORK);
+             ogs_expect(r == OGS_OK);
+diff --git a/src/amf/namf-handler.c b/src/amf/namf-handler.c
+index 77a7d44..8a5c0a6 100644
+--- a/src/amf/namf-handler.c
++++ b/src/amf/namf-handler.c
+@@ -15,6 +15,8 @@
+  *
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ *
++ * Modified Date: 2023-06-28 Description: add log level 'MESSAGE'
+  */
+ 
+ #include "namf-handler.h"
+@@ -209,6 +211,11 @@ int amf_namf_comm_handle_n1_n2_message_transfer(
+                     r = ngap_send_to_ran_ue(ran_ue, ngapbuf);
+                     ogs_expect(r == OGS_OK);
+                     ogs_assert(r != OGS_ERROR);
++
++                    if (r == OGS_OK) {
++                        amf_log_nas_message(OGS_NAS_5GS_PDU_SESSION_ESTABLISHMENT_ACCEPT, amf_ue->supi);
++                    }   
++                    
+                 } else {
+                     sess->pdu_session_establishment_accept = ngapbuf;
+                 }
+diff --git a/src/amf/nas-path.c b/src/amf/nas-path.c
+index 4e6dca5..4d43de5 100644
+--- a/src/amf/nas-path.c
++++ b/src/amf/nas-path.c
+@@ -15,6 +15,8 @@
+  *
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ *
++ * Modified Date: 2023-06-28 Description: add log level 'MESSAGE'
+  */
+ 
+ #include "ngap-path.h"
+@@ -180,6 +182,9 @@ int nas_5gs_send_registration_accept(amf_ue_t *amf_ue)
+         }
+     }
+ 
++    if (rv == OGS_OK) {
++        amf_log_nas_message(OGS_NAS_5GS_REGISTRATION_ACCEPT, amf_ue->supi);
++    }
+     return rv;
+ }
+ 
+@@ -227,6 +232,10 @@ int nas_5gs_send_registration_reject(
+     rv = nas_5gs_send_to_downlink_nas_transport(amf_ue, gmmbuf);
+     ogs_expect(rv == OGS_OK);
+ 
++    if (rv == OGS_OK) {
++        amf_log_nas_message(OGS_NAS_5GS_REGISTRATION_REJECT, amf_ue->supi);
++    }   
++
+     return rv;
+ }
+ 
+@@ -308,6 +317,10 @@ int nas_5gs_send_service_accept(amf_ue_t *amf_ue)
+         }
+     }
+ 
++    if (rv == OGS_OK) {
++        amf_log_nas_message(OGS_NAS_5GS_SERVICE_ACCEPT, amf_ue->supi);
++    }
++
+     return rv;
+ }
+ 
+@@ -338,6 +351,10 @@ int nas_5gs_send_service_reject(
+     rv = nas_5gs_send_to_downlink_nas_transport(amf_ue, gmmbuf);
+     ogs_expect(rv == OGS_OK);
+ 
++    if (rv == OGS_OK) {
++        amf_log_nas_message(OGS_NAS_5GS_SERVICE_REJECT, amf_ue->supi);
++    }
++
+     return rv;
+ }
+ 
+@@ -375,6 +392,8 @@ int nas_5gs_send_de_registration_accept(amf_ue_t *amf_ue)
+             ogs_error("nas_5gs_send_to_downlink_nas_transport() failed");
+             return rv;
+         }
++
++        amf_log_nas_message(OGS_NAS_5GS_DEREGISTRATION_ACCEPT_FROM_UE, amf_ue->supi);
+     }
+ 
+     rv = ngap_send_ran_ue_context_release_command(ran_ue,
+@@ -431,6 +450,10 @@ int nas_5gs_send_de_registration_request(
+     rv = nas_5gs_send_to_downlink_nas_transport(amf_ue, gmmbuf);
+     ogs_expect(rv == OGS_OK);
+ 
++    if (rv == OGS_OK) {
++        amf_log_nas_message(OGS_NAS_5GS_DEREGISTRATION_REQUEST_TO_UE, amf_ue->supi);
++    }   
++
+     return rv;
+ }
+ 
+@@ -844,6 +867,11 @@ int nas_send_pdu_session_release_command(amf_sess_t *sess,
+ 
+         rv = nas_5gs_send_to_gnb(amf_ue, ngapbuf);
+         ogs_expect(rv == OGS_OK);
++
++        if (rv == OGS_OK) {
++            amf_log_nas_message(OGS_NAS_5GS_PDU_SESSION_RELEASE_COMMAND, amf_ue->supi);
++        }
++
+     } else if (gmmbuf) {
+         ogs_pkbuf_free(n2smbuf);
+         ngapbuf = ngap_build_downlink_nas_transport(
+@@ -855,6 +883,11 @@ int nas_send_pdu_session_release_command(amf_sess_t *sess,
+ 
+         rv = nas_5gs_send_to_gnb(amf_ue, ngapbuf);
+         ogs_expect(rv == OGS_OK);
++
++        if (rv == OGS_OK) {
++            amf_log_nas_message(OGS_NAS_5GS_PDU_SESSION_RELEASE_COMMAND, amf_ue->supi);
++        }
++
+     } else {
+         /*
+          * TS23.527
+diff --git a/src/amf/ngap-handler.c b/src/amf/ngap-handler.c
+index 4d5cba4..a4f7714 100644
+--- a/src/amf/ngap-handler.c
++++ b/src/amf/ngap-handler.c
+@@ -15,6 +15,8 @@
+  *
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ *
++ * Modified Date: 2023-06-28 Description: add log level 'MESSAGE'
+  */
+ 
+ #include "ngap-handler.h"
+@@ -178,6 +180,8 @@ void ngap_handle_ng_setup_request(amf_gnb_t *gnb, ogs_ngap_message_t *message)
+     ogs_ngap_GNB_ID_to_uint32(&globalGNB_ID->gNB_ID, &gnb_id);
+     ogs_debug("    IP[%s] GNB_ID[0x%x]", OGS_ADDR(gnb->sctp.addr, buf), gnb_id);
+ 
++    amf_log_ngap_message_from_gnb(NGAP_ProcedureCode_id_NGSetup, gnb_id, NULL, NULL);
++
+     if (PagingDRX)
+         ogs_debug("    PagingDRX[%ld]", *PagingDRX);
+ 
+@@ -2702,6 +2706,7 @@ void ngap_handle_path_switch_request(
+         ogs_assert(r != OGS_ERROR);
+         return;
+     }
++    amf_log_ngap_message_from_gnb(NGAP_ProcedureCode_id_PathSwitchRequest, gnb->gnb_id, amf_ue->supi, NULL);
+ 
+     ogs_info("    [OLD] RAN_UE_NGAP_ID[%d] AMF_UE_NGAP_ID[%lld] ",
+         ran_ue->ran_ue_ngap_id, (long long)ran_ue->amf_ue_ngap_id);
+@@ -3016,6 +3021,7 @@ void ngap_handle_handover_required(
+         ogs_assert(r != OGS_ERROR);
+         return;
+     }
++    amf_log_ngap_message_from_gnb(NGAP_ProcedureCode_id_HandoverPreparation, gnb->gnb_id, amf_ue->supi, NULL);
+ 
+     if (!HandoverType) {
+         ogs_error("No HandoverType");
+@@ -3371,6 +3377,7 @@ void ngap_handle_handover_request_ack(
+         ogs_assert(r != OGS_ERROR);
+         return;
+     }
++    amf_log_ngap_message_from_gnb(NGAP_ProcedureCode_id_HandoverResourceAllocation, gnb->gnb_id, amf_ue->supi, NULL);
+ 
+     ogs_debug("    Source : RAN_UE_NGAP_ID[%d] AMF_UE_NGAP_ID[%lld] ",
+         source_ue->ran_ue_ngap_id, (long long)source_ue->amf_ue_ngap_id);
+@@ -3963,6 +3970,8 @@ void ngap_handle_handover_notification(
+         return;
+     }
+ 
++    amf_log_ngap_message_from_gnb(NGAP_ProcedureCode_id_HandoverNotification, gnb->gnb_id, amf_ue->supi, NULL);
++
+     amf_ue_associate_ran_ue(amf_ue, target_ue);
+ 
+     if (!UserLocationInformation) {
+@@ -4279,6 +4288,7 @@ void ngap_handle_ng_reset(
+     ogs_assert(NGReset);
+ 
+     ogs_warn("NGReset");
++    amf_log_ngap_message_from_gnb(NGAP_ProcedureCode_id_NGReset, gnb->gnb_id, NULL, true);
+ 
+     for (i = 0; i < NGReset->protocolIEs.list.count; i++) {
+         ie = NGReset->protocolIEs.list.array[i];
+@@ -4472,6 +4482,10 @@ void ngap_handle_ng_reset(
+         ogs_expect(r == OGS_OK);
+         ogs_assert(r != OGS_ERROR);
+ 
++        if (r == OGS_OK){
++            amf_log_ngap_message_from_amf(NGAP_ProcedureCode_id_NGReset, gnb->gnb_id, NULL, false);
++        }
++
+         /* Clear NG-Reset Ack Buffer */
+         gnb->ng_reset_ack = NULL;
+         break;
+diff --git a/src/amf/ngap-path.c b/src/amf/ngap-path.c
+index 4861034..9274add 100644
+--- a/src/amf/ngap-path.c
++++ b/src/amf/ngap-path.c
+@@ -15,6 +15,8 @@
+  *
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ *
++ * Modified Date: 2023-06-28 Description: add log level 'MESSAGE'
+  */
+ 
+ #include "ogs-sctp.h"
+@@ -273,6 +275,10 @@ int ngap_send_ng_setup_response(amf_gnb_t *gnb)
+     rv = ngap_send_to_gnb(gnb, ngap_buffer, NGAP_NON_UE_SIGNALLING);
+     ogs_expect(rv == OGS_OK);
+ 
++    if (rv == OGS_OK){
++        amf_log_ngap_message_from_amf(NGAP_ProcedureCode_id_NGSetup, gnb->gnb_id, NULL, NULL);
++    }
++
+     return rv;
+ }
+ 
+@@ -456,6 +462,8 @@ int ngap_send_paging(amf_ue_t *amf_ue)
+                         ogs_error("ngap_send_to_gnb() failed");
+                         return rv;
+                     }
++
++                    amf_log_ngap_message_from_amf(NGAP_ProcedureCode_id_Paging, gnb->gnb_id, amf_ue->supi, NULL);
+                 }
+             }
+         }
+@@ -521,6 +529,10 @@ int ngap_send_path_switch_ack(amf_sess_t *sess)
+     rv = nas_5gs_send_to_gnb(amf_ue, ngapbuf);
+     ogs_expect(rv == OGS_OK);
+ 
++    if (rv == OGS_OK){
++        amf_log_ngap_message_from_amf(NGAP_ProcedureCode_id_PathSwitchRequest, amf_ue->ran_ue->gnb->gnb_id, amf_ue->supi, NULL);
++    }
++
+     return rv;
+ }
+ 
+@@ -557,6 +569,10 @@ int ngap_send_handover_request(amf_ue_t *amf_ue)
+     rv = ngap_send_to_ran_ue(target_ue, ngapbuf);
+     ogs_expect(rv == OGS_OK);
+ 
++    if (rv == OGS_OK){
++        amf_log_ngap_message_from_amf(NGAP_ProcedureCode_id_HandoverResourceAllocation, target_ue->gnb->gnb_id, amf_ue->supi, NULL);
++    }
++
+     return rv;
+ }
+ 
+@@ -612,6 +628,10 @@ int ngap_send_handover_command(amf_ue_t *amf_ue)
+     rv = ngap_send_to_ran_ue(source_ue, ngapbuf);
+     ogs_expect(rv == OGS_OK);
+ 
++    if (rv == OGS_OK){
++        amf_log_ngap_message_from_amf(NGAP_ProcedureCode_id_HandoverPreparation, source_ue->gnb->gnb_id, amf_ue->supi, NULL);
++    }
++
+     return rv;
+ }
+ 
+@@ -735,5 +755,9 @@ int ngap_send_ng_reset_ack(
+     rv = ngap_send_to_gnb(gnb, ngapbuf, NGAP_NON_UE_SIGNALLING);
+     ogs_expect(rv == OGS_OK);
+ 
++    if (rv == OGS_OK){
++        amf_log_ngap_message_from_amf(NGAP_ProcedureCode_id_NGReset, gnb->gnb_id, NULL, false);
++    }
++    
+     return rv;
+ }
+diff --git a/src/main.c b/src/main.c
+index 329d5b1..31bae14 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -100,6 +100,8 @@ int main(int argc, const char *const argv[])
+      *
+      * Keep the order of starting-up
+      */
++    signal(SIGPIPE, SIG_IGN); // Ignore SIGPIPE 
++
+     int rv, i, opt;
+     ogs_getopt_t options;
+     struct {
+diff --git a/src/smf/n4-handler.c b/src/smf/n4-handler.c
+index ef3e2b5..4f4490c 100644
+--- a/src/smf/n4-handler.c
++++ b/src/smf/n4-handler.c
+@@ -163,6 +163,7 @@ uint8_t smf_5gc_n4_handle_session_establishment_response(
+     ogs_assert(rsp);
+ 
+     ogs_debug("Session Establishment Response [5gc]");
++    ogs_pfcp_log_message(OGS_PFCP_SESSION_ESTABLISHMENT_RESPONSE_TYPE, &xact->node->addr, sess->smf_ue->supi);
+ 
+     stream = xact->assoc_stream;
+     ogs_assert(stream);
+@@ -255,6 +256,7 @@ void smf_5gc_n4_handle_session_modification_response(
+     OGS_LIST(pdr_to_create_list);
+ 
+     ogs_debug("Session Modification Response [5gc]");
++    ogs_pfcp_log_message(OGS_PFCP_SESSION_MODIFICATION_RESPONSE_TYPE, &xact->node->addr, sess->smf_ue->supi);
+ 
+     ogs_assert(xact);
+     ogs_assert(rsp);
+@@ -1193,6 +1195,10 @@ void smf_n4_handle_session_report_request(
+     }
+ 
+     ogs_assert(sess);
++    
++    ogs_pfcp_log_message(OGS_PFCP_SESSION_REPORT_REQUEST_TYPE, &pfcp_xact->node->addr, sess->smf_ue->supi);
++    
++    
+     report_type.value = pfcp_req->report_type.u8;
+ 
+     if (report_type.downlink_data_report) {
+diff --git a/src/smf/pfcp-path.c b/src/smf/pfcp-path.c
+index a636f18..e49fb5c 100644
+--- a/src/smf/pfcp-path.c
++++ b/src/smf/pfcp-path.c
+@@ -351,11 +351,15 @@ int smf_pfcp_send_modify_list(
+ 
+     if (duration) {
+         ogs_pfcp_xact_delayed_commit(xact, duration);
+-
++        ogs_pfcp_log_message(OGS_PFCP_SESSION_MODIFICATION_REQUEST_TYPE, &xact->node->addr, sess->smf_ue->supi);
+         return OGS_OK;
+     } else {
+         rv = ogs_pfcp_xact_commit(xact);
+         ogs_expect(rv == OGS_OK);
++        
++        if (rv == OGS_OK){
++            ogs_pfcp_log_message(OGS_PFCP_SESSION_MODIFICATION_REQUEST_TYPE, &xact->node->addr, sess->smf_ue->supi);
++        }
+ 
+         return rv;
+     }
+@@ -400,6 +404,8 @@ int smf_5gc_pfcp_send_session_establishment_request(
+     rv = ogs_pfcp_xact_commit(xact);
+     ogs_expect(rv == OGS_OK);
+ 
++    ogs_pfcp_log_message(OGS_PFCP_SESSION_ESTABLISHMENT_REQUEST_TYPE, &xact->node->addr, sess->smf_ue->supi);
++
+     return rv;
+ }
+ 
+@@ -785,5 +791,9 @@ int smf_pfcp_send_session_report_response(
+     rv = ogs_pfcp_xact_commit(xact);
+     ogs_expect(rv == OGS_OK);
+ 
++    if (rv == OGS_OK){
++        ogs_pfcp_log_message(OGS_PFCP_SESSION_REPORT_RESPONSE_TYPE, &xact->node->addr, sess->smf_ue->supi);
++    }
++
+     return rv;
+ }
