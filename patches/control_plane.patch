@@ -88,6 +88,22 @@ index 24a6b77..79b2d12 100644
      OGS_LOG_DEBUG,
      OGS_LOG_TRACE,
      OGS_LOG_DEFAULT = OGS_LOG_INFO,
+diff --git a/lib/dbi/subscription.c b/lib/dbi/subscription.c
+index 4f7f081..7889b52 100644
+--- a/lib/dbi/subscription.c
++++ b/lib/dbi/subscription.c
+@@ -385,6 +385,11 @@ int ogs_dbi_subscription_data(char *supi,
+             subscription_data->imsi =
+                 ogs_strndup(utf8, ogs_min(length, OGS_MAX_IMSI_BCD_LEN) + 1);
+             ogs_assert(subscription_data->imsi);
++        } else if (!strcmp(key, "imeisv") &&
++            BSON_ITER_HOLDS_UTF8(&iter)) {
++            utf8 = bson_iter_utf8(&iter, &length);
++            subscription_data->pei =
++                ogs_strndup(utf8, ogs_min(length, OGS_MAX_IMEISV_BCD_LEN) + 1);
+         } else if (!strcmp(key, "access_restriction_data") &&
+             BSON_ITER_HOLDS_INT32(&iter)) {
+             subscription_data->access_restriction_data =
 diff --git a/lib/pfcp/handler.c b/lib/pfcp/handler.c
 index 356bd81..c863828 100644
 --- a/lib/pfcp/handler.c
@@ -169,6 +185,48 @@ index 8719afd..3cb87d3 100644
 +
      return rv;
  }
+ 
+diff --git a/lib/proto/types.h b/lib/proto/types.h
+index b05626a..919041b 100644
+--- a/lib/proto/types.h
++++ b/lib/proto/types.h
+@@ -698,6 +698,7 @@ typedef struct ogs_subscription_data_s {
+     ogs_slice_data_t slice[OGS_MAX_NUM_OF_SLICE];
+ 
+     char *imsi;
++    char *pei;
+ 
+ #define OGS_MAX_NUM_OF_MSISDN                                   2
+     int num_of_msisdn;
+diff --git a/lib/sbi/ogs-sbi.h b/lib/sbi/ogs-sbi.h
+index f5430b2..cce262f 100644
+--- a/lib/sbi/ogs-sbi.h
++++ b/lib/sbi/ogs-sbi.h
+@@ -28,6 +28,8 @@
+ #pragma GCC diagnostic ignored "-Wstrict-prototypes"
+ #endif
+ 
++#define OGS_SBI_DISABLE_NETWORK_SERVICE_REQUEST_WHILE_ACTIVATING 1
++
+ #include "model/nf_profile.h"
+ #include "model/nf_group_cond.h"
+ #include "model/smf_info.h"
+diff --git a/src/amf/context.h b/src/amf/context.h
+index e95db3d..cb82719 100644
+--- a/src/amf/context.h
++++ b/src/amf/context.h
+@@ -303,6 +303,12 @@ struct amf_ue_s {
+     ((__aMF)->security_context_available == 1) && \
+      ((__aMF)->mac_failed == 0) && \
+      ((__aMF)->nas.ue.ksi != OGS_NAS_KSI_NO_KEY_IS_AVAILABLE))
++#define CLEAR_SECURITY_CONTEXT(__aMF) \
++    do { \
++        ogs_assert((__aMF)); \
++        (__aMF)->security_context_available = 0; \
++        (__aMF)->mac_failed = 0; \
++    } while(0)
+     int             security_context_available;
+     int             mac_failed;
  
 diff --git a/src/amf/event.c b/src/amf/event.c
 index a920f61..61f34aa 100644
@@ -394,7 +452,7 @@ index 50b4c1e..eb647a9 100644
                  OGS_NAS_5GS_PDU_SESSION_ESTABLISHMENT_REQUEST) {
              sess = amf_sess_find_by_psi(amf_ue, *pdu_session_id);
 diff --git a/src/amf/gmm-sm.c b/src/amf/gmm-sm.c
-index 71a25c6..256f32e 100644
+index 71a25c6..ca5155d 100644
 --- a/src/amf/gmm-sm.c
 +++ b/src/amf/gmm-sm.c
 @@ -15,6 +15,8 @@
@@ -431,6 +489,15 @@ index 71a25c6..256f32e 100644
              break;
  
          default:
+@@ -1594,7 +1600,7 @@ void gmm_state_security_mode(ogs_fsm_t *s, amf_event_t *e)
+             }
+ 
+             if (!SECURITY_CONTEXT_IS_VALID(amf_ue)) {
+-                ogs_warn("[%s] No Security Context", amf_ue->supi);
++                ogs_error("[%s] No Security Context", amf_ue->supi);
+                 break;
+             }
+ 
 @@ -1668,6 +1674,7 @@ void gmm_state_security_mode(ogs_fsm_t *s, amf_event_t *e)
  
          case OGS_NAS_5GS_SERVICE_REQUEST:
@@ -580,6 +647,20 @@ index 4e6dca5..4d43de5 100644
      } else {
          /*
           * TS23.527
+diff --git a/src/amf/nausf-handler.c b/src/amf/nausf-handler.c
+index 13577e4..d5cd875 100644
+--- a/src/amf/nausf-handler.c
++++ b/src/amf/nausf-handler.c
+@@ -105,6 +105,9 @@ int amf_nausf_auth_handle_authenticate(
+     ogs_ascii_to_hex(AV5G_AKA->autn, strlen(AV5G_AKA->autn),
+         amf_ue->autn, sizeof(amf_ue->autn));
+ 
++    /* Clear Security Context */
++    CLEAR_SECURITY_CONTEXT(amf_ue);
++
+     if (amf_ue->nas.amf.ksi < (OGS_NAS_KSI_NO_KEY_IS_AVAILABLE - 1))
+         amf_ue->nas.amf.ksi++;
+     else
 diff --git a/src/amf/ngap-handler.c b/src/amf/ngap-handler.c
 index 4d5cba4..a4f7714 100644
 --- a/src/amf/ngap-handler.c
@@ -743,8 +824,166 @@ index 329d5b1..31bae14 100644
      int rv, i, opt;
      ogs_getopt_t options;
      struct {
+diff --git a/src/mme/emm-sm.c b/src/mme/emm-sm.c
+index 0e34cdf..890833f 100644
+--- a/src/mme/emm-sm.c
++++ b/src/mme/emm-sm.c
+@@ -612,7 +612,7 @@ static void common_register_state(ogs_fsm_t *s, mme_event_t *e,
+             }
+ 
+             if (!SECURITY_CONTEXT_IS_VALID(mme_ue)) {
+-                ogs_warn("No Security Context : IMSI[%s]", mme_ue->imsi_bcd);
++                ogs_error("No Security Context : IMSI[%s]", mme_ue->imsi_bcd);
+                 r = nas_eps_send_service_reject(mme_ue,
+                     OGS_NAS_EMM_CAUSE_UE_IDENTITY_CANNOT_BE_DERIVED_BY_THE_NETWORK);
+                 ogs_expect(r == OGS_OK);
+@@ -739,7 +739,7 @@ static void common_register_state(ogs_fsm_t *s, mme_event_t *e,
+             }
+ 
+             if (!SECURITY_CONTEXT_IS_VALID(mme_ue)) {
+-                ogs_warn("No Security Context : IMSI[%s]", mme_ue->imsi_bcd);
++                ogs_error("No Security Context : IMSI[%s]", mme_ue->imsi_bcd);
+                 ogs_assert(OGS_OK ==
+                     nas_eps_send_service_reject(mme_ue,
+                     OGS_NAS_EMM_CAUSE_UE_IDENTITY_CANNOT_BE_DERIVED_BY_THE_NETWORK));
+@@ -953,7 +953,7 @@ void emm_state_authentication(ogs_fsm_t *s, mme_event_t *e)
+             }
+ 
+             if (!SECURITY_CONTEXT_IS_VALID(mme_ue)) {
+-                ogs_warn("No Security Context : IMSI[%s]", mme_ue->imsi_bcd);
++                ogs_error("No Security Context : IMSI[%s]", mme_ue->imsi_bcd);
+                 ogs_assert(OGS_OK ==
+                     nas_eps_send_service_reject(mme_ue,
+                     OGS_NAS_EMM_CAUSE_UE_IDENTITY_CANNOT_BE_DERIVED_BY_THE_NETWORK));
+@@ -1074,7 +1074,7 @@ void emm_state_security_mode(ogs_fsm_t *s, mme_event_t *e)
+             }
+ 
+             if (!SECURITY_CONTEXT_IS_VALID(mme_ue)) {
+-                ogs_warn("[%s] No Security Context", mme_ue->imsi_bcd);
++                ogs_error("[%s] No Security Context", mme_ue->imsi_bcd);
+                 break;
+             }
+ 
+@@ -1153,7 +1153,7 @@ void emm_state_security_mode(ogs_fsm_t *s, mme_event_t *e)
+             }
+ 
+             if (!SECURITY_CONTEXT_IS_VALID(mme_ue)) {
+-                ogs_warn("No Security Context : IMSI[%s]", mme_ue->imsi_bcd);
++                ogs_error("No Security Context : IMSI[%s]", mme_ue->imsi_bcd);
+                 ogs_assert(OGS_OK ==
+                     nas_eps_send_service_reject(mme_ue,
+                     OGS_NAS_EMM_CAUSE_UE_IDENTITY_CANNOT_BE_DERIVED_BY_THE_NETWORK));
+@@ -1271,7 +1271,7 @@ void emm_state_initial_context_setup(ogs_fsm_t *s, mme_event_t *e)
+             }
+ 
+             if (!SECURITY_CONTEXT_IS_VALID(mme_ue)) {
+-                ogs_warn("[%s] No Security Context", mme_ue->imsi_bcd);
++                ogs_error("[%s] No Security Context", mme_ue->imsi_bcd);
+                 break;
+             }
+ 
+@@ -1323,7 +1323,7 @@ void emm_state_initial_context_setup(ogs_fsm_t *s, mme_event_t *e)
+             }
+ 
+             if (!SECURITY_CONTEXT_IS_VALID(mme_ue)) {
+-                ogs_warn("[%s] No Security Context", mme_ue->imsi_bcd);
++                ogs_error("[%s] No Security Context", mme_ue->imsi_bcd);
+                 break;
+             }
+ 
+@@ -1384,7 +1384,7 @@ void emm_state_initial_context_setup(ogs_fsm_t *s, mme_event_t *e)
+             }
+ 
+             if (!SECURITY_CONTEXT_IS_VALID(mme_ue)) {
+-                ogs_warn("No Security Context : IMSI[%s]", mme_ue->imsi_bcd);
++                ogs_error("No Security Context : IMSI[%s]", mme_ue->imsi_bcd);
+                 ogs_assert(OGS_OK ==
+                     nas_eps_send_service_reject(mme_ue,
+                     OGS_NAS_EMM_CAUSE_UE_IDENTITY_CANNOT_BE_DERIVED_BY_THE_NETWORK));
+diff --git a/src/pcf/context.c b/src/pcf/context.c
+index 7545e61..492c598 100644
+--- a/src/pcf/context.c
++++ b/src/pcf/context.c
+@@ -123,6 +123,16 @@ int pcf_context_parse_config(void)
+                     /* handle config in sbi library */
+                 } else if (!strcmp(pcf_key, "metrics")) {
+                     /* handle config in metrics library */
++                } else if (!strcmp(pcf_key, "imeisv_check")) {
++                    const char *imeisv_check = ogs_yaml_iter_value(&pcf_iter);
++                    bool *enabled = &self.imeisv_check;
++                    if (!strcmp("True", imeisv_check) || 
++                        !strcmp("true", imeisv_check)) {
++                        *enabled = true;
++                    }
++                    else {
++                        *enabled = false;
++                    }
+                 } else
+                     ogs_warn("unknown key `%s`", pcf_key);
+             }
+diff --git a/src/pcf/context.h b/src/pcf/context.h
+index 0dbd446..bc7ce06 100644
+--- a/src/pcf/context.h
++++ b/src/pcf/context.h
+@@ -43,6 +43,7 @@ typedef struct pcf_context_s {
+ 
+     ogs_hash_t      *ipv4addr_hash;
+     ogs_hash_t      *ipv6prefix_hash;
++    bool            imeisv_check;
+ } pcf_context_t;
+ 
+ struct pcf_ue_s {
+diff --git a/src/pcf/npcf-handler.c b/src/pcf/npcf-handler.c
+index 36e767c..990d982 100644
+--- a/src/pcf/npcf-handler.c
++++ b/src/pcf/npcf-handler.c
+@@ -124,7 +124,8 @@ bool pcf_npcf_am_policy_contrtol_handle_create(pcf_ue_t *pcf_ue,
+         ogs_assert(value);
+ 
+         if (strcmp(type, "imeisv") == 0) {
+-            ogs_assert(OGS_OK == ogs_dbi_update_imeisv(pcf_ue->supi, value));
++            if (!pcf_self()->imeisv_check)
++                ogs_assert(OGS_OK == ogs_dbi_update_imeisv(pcf_ue->supi, value));
+         } else {
+             ogs_fatal("Unknown Type = %s", type);
+             ogs_assert_if_reached();
+diff --git a/src/pcf/nudr-handler.c b/src/pcf/nudr-handler.c
+index 90aeb25..ed61adb 100644
+--- a/src/pcf/nudr-handler.c
++++ b/src/pcf/nudr-handler.c
+@@ -69,10 +69,17 @@ bool pcf_nudr_dr_handle_query_am_data(
+             status = OGS_SBI_HTTP_STATUS_NOT_FOUND;
+             goto cleanup;
+         }
++        
++        if (pcf_self()->imeisv_check && ogs_strcasecmp(subscription_data.pei, ogs_id_get_value(pcf_ue->pei)) != 0) {
++            strerror = ogs_msprintf("IMEISV verification failed(%s != %s)",
++                ogs_id_get_value(pcf_ue->pei), subscription_data.pei);
++            status = OGS_SBI_HTTP_STATUS_NOT_FOUND;
++            goto cleanup;
++        }
+ 
+         if (!subscription_data.ambr.uplink &&
+                 !subscription_data.ambr.downlink) {
+-            ogs_error("[%s] No UE-AMBR", pcf_ue->supi);
++            strerror = ogs_msprintf("[%s] No UE-AMBR", pcf_ue->supi);
+             status = OGS_SBI_HTTP_STATUS_NOT_FOUND;
+             goto cleanup;
+         }
+diff --git a/src/smf/context.h b/src/smf/context.h
+index 9fbd98b..784a9f3 100644
+--- a/src/smf/context.h
++++ b/src/smf/context.h
+@@ -362,7 +362,6 @@ typedef struct smf_sess_s {
+ 
+     /* Paging */
+     struct {
+-        bool ue_requested_pdu_session_establishment_done;
+         char *n1n2message_location;
+     } paging;
+ 
 diff --git a/src/smf/n4-handler.c b/src/smf/n4-handler.c
-index ef3e2b5..4f4490c 100644
+index ef3e2b5..3262409 100644
 --- a/src/smf/n4-handler.c
 +++ b/src/smf/n4-handler.c
 @@ -163,6 +163,7 @@ uint8_t smf_5gc_n4_handle_session_establishment_response(
@@ -763,17 +1002,82 @@ index ef3e2b5..4f4490c 100644
  
      ogs_assert(xact);
      ogs_assert(rsp);
-@@ -1193,6 +1195,10 @@ void smf_n4_handle_session_report_request(
+@@ -401,8 +403,6 @@ void smf_5gc_n4_handle_session_modification_response(
+                     sess, stream, OpenAPI_ho_state_COMPLETED);
+ 
+         } else {
+-            sess->paging.ue_requested_pdu_session_establishment_done = true;
+-
+             if (sess->up_cnx_state == OpenAPI_up_cnx_state_ACTIVATING) {
+                 sess->up_cnx_state = OpenAPI_up_cnx_state_ACTIVATED;
+                 smf_sbi_send_sm_context_updated_data_up_cnx_state(
+@@ -1157,6 +1157,7 @@ void smf_n4_handle_session_report_request(
+         smf_sess_t *sess, ogs_pfcp_xact_t *pfcp_xact,
+         ogs_pfcp_session_report_request_t *pfcp_req)
+ {
++    smf_ue_t *smf_ue = NULL;
+     smf_bearer_t *qos_flow = NULL;
+     smf_bearer_t *bearer = NULL;
+     ogs_pfcp_pdr_t *pdr = NULL;
+@@ -1193,12 +1194,18 @@ void smf_n4_handle_session_report_request(
      }
  
      ogs_assert(sess);
 +    
 +    ogs_pfcp_log_message(OGS_PFCP_SESSION_REPORT_REQUEST_TYPE, &pfcp_xact->node->addr, sess->smf_ue->supi);
 +    
-+    
++    smf_ue = sess->smf_ue;
++    ogs_assert(smf_ue);
      report_type.value = pfcp_req->report_type.u8;
  
      if (report_type.downlink_data_report) {
+         ogs_pfcp_downlink_data_service_information_t *info = NULL;
+         uint8_t paging_policy_indication_value = 0;
+         uint8_t qfi = 0;
++        smf_n1_n2_message_transfer_param_t param;
+ 
+         if (pfcp_req->downlink_data_report.presence) {
+             if (pfcp_req->downlink_data_report.
+@@ -1263,9 +1270,21 @@ void smf_n4_handle_session_report_request(
+             return;
+         }
+ 
+-        if (sess->paging.ue_requested_pdu_session_establishment_done == true) {
+-            smf_n1_n2_message_transfer_param_t param;
+-
++        switch (sess->up_cnx_state) {
++        case OpenAPI_up_cnx_state_NULL:
++            /* UE Requested PDU Session is NOT established */
++            break;
++        case OpenAPI_up_cnx_state_ACTIVATED:
++            ogs_error("[%s:%s] PDU Session had already been ACTIVATED",
++                smf_ue->imsi_bcd, sess->session.name);
++            break;
++        case OpenAPI_up_cnx_state_ACTIVATING:
++#if OGS_SBI_DISABLE_NETWORK_SERVICE_REQUEST_WHILE_ACTIVATING == 1
++            ogs_warn("[%s:%s] UE is being triggering Service Request",
++                smf_ue->imsi_bcd, sess->session.name);
++            break;
++#endif
++        case OpenAPI_up_cnx_state_DEACTIVATED:
+             memset(&param, 0, sizeof(param));
+             param.state = SMF_NETWORK_TRIGGERED_SERVICE_REQUEST;
+             param.n2smbuf =
+@@ -1275,6 +1294,14 @@ void smf_n4_handle_session_report_request(
+             param.n1n2_failure_txf_notif_uri = true;
+ 
+             smf_namf_comm_send_n1_n2_message_transfer(sess, &param);
++            break;
++        case OpenAPI_up_cnx_state_SUSPENDED:
++            ogs_error("[%s:%s] PDU Session had been SUSPENDED",
++                smf_ue->imsi_bcd, sess->session.name);
++            break;
++        default:
++            ogs_error("Invalid UpCnxState[%d]", sess->up_cnx_state);
++            break;
+         }
+     }
+ 
 diff --git a/src/smf/pfcp-path.c b/src/smf/pfcp-path.c
 index a636f18..e49fb5c 100644
 --- a/src/smf/pfcp-path.c
@@ -814,3 +1118,512 @@ index a636f18..e49fb5c 100644
 +
      return rv;
  }
+diff --git a/tests/registration/auth-test.c b/tests/registration/auth-test.c
+index 9ae7a13..72adc77 100644
+--- a/tests/registration/auth-test.c
++++ b/tests/registration/auth-test.c
+@@ -206,11 +206,360 @@ static void test1_func(abts_case *tc, void *data)
+     test_ue_remove(test_ue);
+ }
+ 
++static void test2_func(abts_case *tc, void *data)
++{
++    int rv;
++    ogs_socknode_t *ngap;
++    ogs_socknode_t *gtpu;
++    ogs_pkbuf_t *gmmbuf;
++    ogs_pkbuf_t *gsmbuf;
++    ogs_pkbuf_t *nasbuf;
++    ogs_pkbuf_t *sendbuf;
++    ogs_pkbuf_t *recvbuf;
++    ogs_ngap_message_t message;
++    int i;
++
++    ogs_nas_5gs_mobile_identity_suci_t mobile_identity_suci;
++    test_ue_t *test_ue = NULL;
++    test_sess_t *sess = NULL;
++    test_bearer_t *qos_flow = NULL;
++
++    bson_t *doc = NULL;
++
++    /* Setup Test UE & Session Context */
++    memset(&mobile_identity_suci, 0, sizeof(mobile_identity_suci));
++
++    mobile_identity_suci.h.supi_format = OGS_NAS_5GS_SUPI_FORMAT_IMSI;
++    mobile_identity_suci.h.type = OGS_NAS_5GS_MOBILE_IDENTITY_SUCI;
++    mobile_identity_suci.routing_indicator1 = 0;
++    mobile_identity_suci.routing_indicator2 = 0xf;
++    mobile_identity_suci.routing_indicator3 = 0xf;
++    mobile_identity_suci.routing_indicator4 = 0xf;
++    mobile_identity_suci.protection_scheme_id = OGS_PROTECTION_SCHEME_NULL;
++    mobile_identity_suci.home_network_pki_value = 0;
++
++    test_ue = test_ue_add_by_suci(&mobile_identity_suci, "0000203190");
++    ogs_assert(test_ue);
++
++    test_ue->nr_cgi.cell_id = 0x40001;
++
++    test_ue->nas.registration.tsc = 0;
++    test_ue->nas.registration.ksi = OGS_NAS_KSI_NO_KEY_IS_AVAILABLE;
++    test_ue->nas.registration.follow_on_request = 1;
++    test_ue->nas.registration.value = OGS_NAS_5GS_REGISTRATION_TYPE_INITIAL;
++
++    test_ue->k_string = "465b5ce8b199b49faa5f0a2ee238a6bc";
++    test_ue->opc_string = "e8ed289deba952e4283b54e88e6183ca";
++
++    /* gNB connects to AMF */
++    ngap = testngap_client(AF_INET);
++    ABTS_PTR_NOTNULL(tc, ngap);
++
++    /* gNB connects to UPF */
++    gtpu = test_gtpu_server(1, AF_INET);
++    ABTS_PTR_NOTNULL(tc, gtpu);
++
++    /* Send NG-Setup Reqeust */
++    sendbuf = testngap_build_ng_setup_request(0x4000, 22);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Receive NG-Setup Response */
++    recvbuf = testgnb_ngap_read(ngap);
++    ABTS_PTR_NOTNULL(tc, recvbuf);
++    testngap_recv(test_ue, recvbuf);
++
++    /********** Insert Subscriber in Database */
++    doc = test_db_new_simple(test_ue);
++    ABTS_PTR_NOTNULL(tc, doc);
++    ABTS_INT_EQUAL(tc, OGS_OK, test_db_insert_ue(test_ue, doc));
++
++    /* Send Registration request */
++    test_ue->registration_request_param.guti = 1;
++    gmmbuf = testgmm_build_registration_request(test_ue, NULL, false, false);
++    ABTS_PTR_NOTNULL(tc, gmmbuf);
++
++    test_ue->registration_request_param.gmm_capability = 1;
++    test_ue->registration_request_param.s1_ue_network_capability = 1;
++    test_ue->registration_request_param.requested_nssai = 1;
++    test_ue->registration_request_param.last_visited_registered_tai = 1;
++    test_ue->registration_request_param.ue_usage_setting = 1;
++    nasbuf = testgmm_build_registration_request(test_ue, NULL, false, false);
++    ABTS_PTR_NOTNULL(tc, nasbuf);
++
++    sendbuf = testngap_build_initial_ue_message(test_ue, gmmbuf,
++                NGAP_RRCEstablishmentCause_mo_Signalling, false, true);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Receive Identity request */
++    recvbuf = testgnb_ngap_read(ngap);
++    ABTS_PTR_NOTNULL(tc, recvbuf);
++    testngap_recv(test_ue, recvbuf);
++
++    /* Send Identity response */
++    gmmbuf = testgmm_build_identity_response(test_ue);
++    ABTS_PTR_NOTNULL(tc, gmmbuf);
++    sendbuf = testngap_build_uplink_nas_transport(test_ue, gmmbuf);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Receive Authentication request */
++    recvbuf = testgnb_ngap_read(ngap);
++    ABTS_PTR_NOTNULL(tc, recvbuf);
++    testngap_recv(test_ue, recvbuf);
++
++    /* Send Authentication response */
++    gmmbuf = testgmm_build_authentication_response(test_ue);
++    ABTS_PTR_NOTNULL(tc, gmmbuf);
++    sendbuf = testngap_build_uplink_nas_transport(test_ue, gmmbuf);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Receive Security mode command */
++    recvbuf = testgnb_ngap_read(ngap);
++    ABTS_PTR_NOTNULL(tc, recvbuf);
++    testngap_recv(test_ue, recvbuf);
++
++    /* Send Security mode complete */
++    gmmbuf = testgmm_build_security_mode_complete(test_ue, nasbuf);
++    ABTS_PTR_NOTNULL(tc, gmmbuf);
++    sendbuf = testngap_build_uplink_nas_transport(test_ue, gmmbuf);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Receive InitialContextSetupRequest +
++     * Registration accept */
++    recvbuf = testgnb_ngap_read(ngap);
++    ABTS_PTR_NOTNULL(tc, recvbuf);
++    testngap_recv(test_ue, recvbuf);
++    ABTS_INT_EQUAL(tc,
++            NGAP_ProcedureCode_id_InitialContextSetup,
++            test_ue->ngap_procedure_code);
++
++    /* Send UERadioCapabilityInfoIndication */
++    sendbuf = testngap_build_ue_radio_capability_info_indication(test_ue);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Send InitialContextSetupResponse */
++    sendbuf = testngap_build_initial_context_setup_response(test_ue, false);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Send Registration complete */
++    gmmbuf = testgmm_build_registration_complete(test_ue);
++    ABTS_PTR_NOTNULL(tc, gmmbuf);
++    sendbuf = testngap_build_uplink_nas_transport(test_ue, gmmbuf);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Receive Configuration update command */
++    recvbuf = testgnb_ngap_read(ngap);
++    ABTS_PTR_NOTNULL(tc, recvbuf);
++    testngap_recv(test_ue, recvbuf);
++
++    /* Send PDU session establishment request */
++    sess = test_sess_add_by_dnn_and_psi(test_ue, "internet", 5);
++    ogs_assert(sess);
++
++    sess->ul_nas_transport_param.request_type =
++        OGS_NAS_5GS_REQUEST_TYPE_INITIAL;
++    sess->ul_nas_transport_param.dnn = 1;
++    sess->ul_nas_transport_param.s_nssai = 0;
++
++    sess->pdu_session_establishment_param.ssc_mode = 1;
++    sess->pdu_session_establishment_param.epco = 1;
++
++    gsmbuf = testgsm_build_pdu_session_establishment_request(sess);
++    ABTS_PTR_NOTNULL(tc, gsmbuf);
++    gmmbuf = testgmm_build_ul_nas_transport(sess,
++            OGS_NAS_PAYLOAD_CONTAINER_N1_SM_INFORMATION, gsmbuf);
++    ABTS_PTR_NOTNULL(tc, gmmbuf);
++    sendbuf = testngap_build_uplink_nas_transport(test_ue, gmmbuf);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Receive PDUSessionResourceSetupRequest +
++     * DL NAS transport +
++     * PDU session establishment accept */
++    recvbuf = testgnb_ngap_read(ngap);
++    ABTS_PTR_NOTNULL(tc, recvbuf);
++    testngap_recv(test_ue, recvbuf);
++    ABTS_INT_EQUAL(tc,
++            NGAP_ProcedureCode_id_PDUSessionResourceSetup,
++            test_ue->ngap_procedure_code);
++
++    /* Send PDUSessionResourceSetupResponse */
++    sendbuf = testngap_sess_build_pdu_session_resource_setup_response(sess);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Send UEContextReleaseRequest */
++    sendbuf = testngap_build_ue_context_release_request(test_ue,
++            NGAP_Cause_PR_radioNetwork, NGAP_CauseRadioNetwork_user_inactivity,
++            true);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Receive UEContextReleaseCommand */
++    recvbuf = testgnb_ngap_read(ngap);
++    ABTS_PTR_NOTNULL(tc, recvbuf);
++    testngap_recv(test_ue, recvbuf);
++    ABTS_INT_EQUAL(tc,
++            NGAP_ProcedureCode_id_UEContextRelease,
++            test_ue->ngap_procedure_code);
++
++    /* Send UEContextReleaseComplete */
++    sendbuf = testngap_build_ue_context_release_complete(test_ue);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Send Registration request
++     * - Update Registration request type
++     * - Uplink Data Status */
++    memset(&test_ue->registration_request_param, 0,
++            sizeof(test_ue->registration_request_param));
++    test_ue->nas.registration.value =
++        OGS_NAS_5GS_REGISTRATION_TYPE_MOBILITY_UPDATING;
++
++    test_ue->registration_request_param.uplink_data_status = 1;
++    test_ue->registration_request_param.psimask.uplink_data_status =
++        1 << sess->psi;
++    nasbuf = testgmm_build_registration_request(test_ue, NULL, false, false);
++    ABTS_PTR_NOTNULL(tc, nasbuf);
++
++    memset(&test_ue->registration_request_param, 0,
++            sizeof(test_ue->registration_request_param));
++    test_ue->registration_request_param.guti = 1;
++    gmmbuf = testgmm_build_registration_request(test_ue, NULL, true, false);
++    ABTS_PTR_NOTNULL(tc, gmmbuf);
++
++    sendbuf = testngap_build_initial_ue_message(test_ue, gmmbuf,
++                NGAP_RRCEstablishmentCause_mo_Signalling, true, true);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++
++    /* Overwrite Message authentcation code for mac_failed = 1 */
++    memset(sendbuf->data + 20, 0, 4);
++
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Receive Authentication request */
++    recvbuf = testgnb_ngap_read(ngap);
++    ABTS_PTR_NOTNULL(tc, recvbuf);
++    testngap_recv(test_ue, recvbuf);
++
++    /* Send Authentication response */
++    gmmbuf = testgmm_build_authentication_response(test_ue);
++    ABTS_PTR_NOTNULL(tc, gmmbuf);
++    sendbuf = testngap_build_uplink_nas_transport(test_ue, gmmbuf);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Receive Security mode command */
++    recvbuf = testgnb_ngap_read(ngap);
++    ABTS_PTR_NOTNULL(tc, recvbuf);
++    testngap_recv(test_ue, recvbuf);
++
++    /* Send Security mode complete */
++    gmmbuf = testgmm_build_security_mode_complete(test_ue, nasbuf);
++    ABTS_PTR_NOTNULL(tc, gmmbuf);
++    sendbuf = testngap_build_uplink_nas_transport(test_ue, gmmbuf);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Receive InitialContextSetupRequest +
++     * Registration accept */
++    recvbuf = testgnb_ngap_read(ngap);
++    ABTS_PTR_NOTNULL(tc, recvbuf);
++    testngap_recv(test_ue, recvbuf);
++    ABTS_INT_EQUAL(tc,
++            NGAP_ProcedureCode_id_InitialContextSetup,
++            test_ue->ngap_procedure_code);
++
++    /* Send UERadioCapabilityInfoIndication */
++    sendbuf = testngap_build_ue_radio_capability_info_indication(test_ue);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Send InitialContextSetupResponse */
++    sendbuf = testngap_build_initial_context_setup_response(test_ue, false);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Send Registration complete */
++    gmmbuf = testgmm_build_registration_complete(test_ue);
++    ABTS_PTR_NOTNULL(tc, gmmbuf);
++    sendbuf = testngap_build_uplink_nas_transport(test_ue, gmmbuf);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Receive Configuration update command */
++    recvbuf = testgnb_ngap_read(ngap);
++    ABTS_PTR_NOTNULL(tc, recvbuf);
++    testngap_recv(test_ue, recvbuf);
++
++    /* Send UEContextReleaseRequest */
++    sendbuf = testngap_build_ue_context_release_request(test_ue,
++            NGAP_Cause_PR_radioNetwork, NGAP_CauseRadioNetwork_user_inactivity,
++            true);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    /* Receive UEContextReleaseCommand */
++    recvbuf = testgnb_ngap_read(ngap);
++    ABTS_PTR_NOTNULL(tc, recvbuf);
++    testngap_recv(test_ue, recvbuf);
++    ABTS_INT_EQUAL(tc,
++            NGAP_ProcedureCode_id_UEContextRelease,
++            test_ue->ngap_procedure_code);
++
++    /* Send UEContextReleaseComplete */
++    sendbuf = testngap_build_ue_context_release_complete(test_ue);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++
++    ogs_msleep(300);
++
++    /********** Remove Subscriber in Database */
++    ABTS_INT_EQUAL(tc, OGS_OK, test_db_remove_ue(test_ue));
++
++    /* gNB disonncect from UPF */
++    testgnb_gtpu_close(gtpu);
++
++    /* gNB disonncect from AMF */
++    testgnb_ngap_close(ngap);
++
++    /* Clear Test UE Context */
++    test_ue_remove(test_ue);
++}
++
+ abts_suite *test_auth(abts_suite *suite)
+ {
+     suite = ADD_SUITE(suite)
+ 
+     abts_run_test(suite, test1_func, NULL);
++    abts_run_test(suite, test2_func, NULL);
+ 
+     return suite;
+ }
+diff --git a/tests/registration/paging-test.c b/tests/registration/paging-test.c
+index 7d930e2..d601095 100644
+--- a/tests/registration/paging-test.c
++++ b/tests/registration/paging-test.c
+@@ -858,6 +858,7 @@ static void cm_connected_paging_func(abts_case *tc, void *data)
+     rv = testgnb_ngap_send(ngap, sendbuf);
+     ABTS_INT_EQUAL(tc, OGS_OK, rv);
+ 
++#if OGS_SBI_DISABLE_NETWORK_SERVICE_REQUEST_WHILE_ACTIVATING == 0
+     /* Receive PDUSessionResourceSetupRequest +
+      * DL NAS transport +
+      * PDU session establishment accept */
+@@ -867,12 +868,14 @@ static void cm_connected_paging_func(abts_case *tc, void *data)
+     ABTS_INT_EQUAL(tc,
+             NGAP_ProcedureCode_id_PDUSessionResourceSetup,
+             test_ue->ngap_procedure_code);
++#endif
+ 
+     /* Receive GTP-U ICMP Packet */
+     recvbuf = testgnb_gtpu_read(gtpu);
+     ABTS_PTR_NOTNULL(tc, recvbuf);
+     ogs_pkbuf_free(recvbuf);
+ 
++#if OGS_SBI_DISABLE_NETWORK_SERVICE_REQUEST_WHILE_ACTIVATING == 0
+     /* Send PDUSessionResourceSetupResponse(Unsuccessful) */
+     sendbuf = testngap_sess_build_pdu_session_resource_failed_to_setup(
+             sess,
+@@ -881,6 +884,7 @@ static void cm_connected_paging_func(abts_case *tc, void *data)
+     ABTS_PTR_NOTNULL(tc, sendbuf);
+     rv = testgnb_ngap_send(ngap, sendbuf);
+     ABTS_INT_EQUAL(tc, OGS_OK, rv);
++#endif
+ 
+     /* Send GTP-U ICMP Packet */
+     rv = test_gtpu_send_ping(gtpu, qos_flow, TEST_PING_IPV4);
+@@ -891,6 +895,16 @@ static void cm_connected_paging_func(abts_case *tc, void *data)
+     ABTS_PTR_NOTNULL(tc, recvbuf);
+     ogs_pkbuf_free(recvbuf);
+ 
++#if OGS_SBI_DISABLE_NETWORK_SERVICE_REQUEST_WHILE_ACTIVATING == 1
++    /* Send UEContextReleaseRequest */
++    sendbuf = testngap_build_ue_context_release_request(test_ue,
++            NGAP_Cause_PR_radioNetwork, NGAP_CauseRadioNetwork_user_inactivity,
++            true);
++    ABTS_PTR_NOTNULL(tc, sendbuf);
++    rv = testgnb_ngap_send(ngap, sendbuf);
++    ABTS_INT_EQUAL(tc, OGS_OK, rv);
++#endif
++
+     /* Receive UEContextReleaseCommand */
+     recvbuf = testgnb_ngap_read(ngap);
+     ABTS_PTR_NOTNULL(tc, recvbuf);
+@@ -1867,6 +1881,7 @@ static void vonr_qos_flow_test1_func(abts_case *tc, void *data)
+     ABTS_PTR_NOTNULL(tc, recvbuf);
+     ogs_pkbuf_free(recvbuf);
+ 
++#if OGS_SBI_DISABLE_NETWORK_SERVICE_REQUEST_WHILE_ACTIVATING == 0
+     /* Receive PDUSessionResourceSetupRequest */
+     recvbuf = testgnb_ngap_read(ngap);
+     ABTS_PTR_NOTNULL(tc, recvbuf);
+@@ -1880,6 +1895,7 @@ static void vonr_qos_flow_test1_func(abts_case *tc, void *data)
+     ABTS_PTR_NOTNULL(tc, sendbuf);
+     rv = testgnb_ngap_send(ngap, sendbuf);
+     ABTS_INT_EQUAL(tc, OGS_OK, rv);
++#endif
+ 
+     /* Send GTP-U ICMP Packet */
+     rv = test_gtpu_send_ping(gtpu, qos_flow, TEST_PING_IPV4);
+@@ -2304,6 +2320,7 @@ static void vonr_session_test2_func(abts_case *tc, void *data)
+     ABTS_PTR_NOTNULL(tc, recvbuf);
+     ogs_pkbuf_free(recvbuf);
+ 
++#if OGS_SBI_DISABLE_NETWORK_SERVICE_REQUEST_WHILE_ACTIVATING == 0
+     /* Receive PDUSessionResourceSetupRequest */
+     recvbuf = testgnb_ngap_read(ngap);
+     ABTS_PTR_NOTNULL(tc, recvbuf);
+@@ -2317,6 +2334,7 @@ static void vonr_session_test2_func(abts_case *tc, void *data)
+     ABTS_PTR_NOTNULL(tc, sendbuf);
+     rv = testgnb_ngap_send(ngap, sendbuf);
+     ABTS_INT_EQUAL(tc, OGS_OK, rv);
++#endif
+ 
+     /* Send GTP-U ICMP Packet */
+     rv = test_gtpu_send_ping(gtpu, qos_flow, TEST_PING_IPV4);
+@@ -2742,6 +2760,7 @@ static void registration_ue_context_test4_func(abts_case *tc, void *data)
+     rv = test_gtpu_send_ping(gtpu, qos_flow, TEST_PING_IPV4);
+     ABTS_INT_EQUAL(tc, OGS_OK, rv);
+ 
++#if OGS_SBI_DISABLE_NETWORK_SERVICE_REQUEST_WHILE_ACTIVATING == 0
+     /* Receive PDUSessionResourceSetupRequest */
+     recvbuf = testgnb_ngap_read(ngap);
+     ABTS_PTR_NOTNULL(tc, recvbuf);
+@@ -2749,6 +2768,7 @@ static void registration_ue_context_test4_func(abts_case *tc, void *data)
+     ABTS_INT_EQUAL(tc,
+             NGAP_ProcedureCode_id_PDUSessionResourceSetup,
+             test_ue->ngap_procedure_code);
++#endif
+ 
+     /* Send InitialContextSetupResponse */
+     sendbuf = testngap_build_initial_context_setup_response(test_ue, true);
+@@ -2756,11 +2776,13 @@ static void registration_ue_context_test4_func(abts_case *tc, void *data)
+     rv = testgnb_ngap_send(ngap, sendbuf);
+     ABTS_INT_EQUAL(tc, OGS_OK, rv);
+ 
++#if OGS_SBI_DISABLE_NETWORK_SERVICE_REQUEST_WHILE_ACTIVATING == 0
+     /* Send PDUSessionResourceSetupResponse */
+     sendbuf = testngap_ue_build_pdu_session_resource_setup_response(test_ue);
+     ABTS_PTR_NOTNULL(tc, sendbuf);
+     rv = testgnb_ngap_send(ngap, sendbuf);
+     ABTS_INT_EQUAL(tc, OGS_OK, rv);
++#endif
+ 
+     /* Receive GTP-U ICMP Packet */
+     recvbuf = testgnb_gtpu_read(gtpu);
+@@ -3171,6 +3193,7 @@ static void registration_idle_test1_func(abts_case *tc, void *data)
+     rv = test_gtpu_send_ping(gtpu, qos_flow, TEST_PING_IPV4);
+     ABTS_INT_EQUAL(tc, OGS_OK, rv);
+ 
++#if OGS_SBI_DISABLE_NETWORK_SERVICE_REQUEST_WHILE_ACTIVATING == 0
+     /* Receive PDUSessionResourceSetupRequest */
+     recvbuf = testgnb_ngap_read(ngap);
+     ABTS_PTR_NOTNULL(tc, recvbuf);
+@@ -3178,6 +3201,7 @@ static void registration_idle_test1_func(abts_case *tc, void *data)
+     ABTS_INT_EQUAL(tc,
+             NGAP_ProcedureCode_id_PDUSessionResourceSetup,
+             test_ue->ngap_procedure_code);
++#endif
+ 
+     /* Send InitialContextSetupResponse */
+     sendbuf = testngap_build_initial_context_setup_response(test_ue, true);
+@@ -3185,11 +3209,13 @@ static void registration_idle_test1_func(abts_case *tc, void *data)
+     rv = testgnb_ngap_send(ngap, sendbuf);
+     ABTS_INT_EQUAL(tc, OGS_OK, rv);
+ 
++#if OGS_SBI_DISABLE_NETWORK_SERVICE_REQUEST_WHILE_ACTIVATING == 0
+     /* Send PDUSessionResourceSetupResponse */
+     sendbuf = testngap_sess_build_pdu_session_resource_setup_response(sess);
+     ABTS_PTR_NOTNULL(tc, sendbuf);
+     rv = testgnb_ngap_send(ngap, sendbuf);
+     ABTS_INT_EQUAL(tc, OGS_OK, rv);
++#endif
+ 
+     /* Receive GTP-U ICMP Packet */
+     recvbuf = testgnb_gtpu_read(gtpu);
